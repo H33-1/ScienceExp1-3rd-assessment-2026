@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+const dir=path.dirname(fileURLToPath(import.meta.url));
+const read=name=>fs.readFileSync(path.join(dir,name),'utf8');
+const html=read('index.html').replace('<link rel="stylesheet" href="styles.css">',()=>'<style>\n'+read('styles.css')+'\n</style>').replace('<script src="app.js"></script>',()=>'<script>\n'+read('app.js')+'\n</script>');
+fs.mkdirSync(path.join(dir,'apps-script'),{recursive:true});
+fs.writeFileSync(path.join(dir,'apps-script','Index.html'),html);
+fs.copyFileSync(path.join(dir,'Code.gs'),path.join(dir,'apps-script','Code.gs'));
+fs.writeFileSync(path.join(dir,'apps-script','appsscript.json'),JSON.stringify({timeZone:'Asia/Seoul',runtimeVersion:'V8',exceptionLogging:'STACKDRIVER',oauthScopes:['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/userinfo.email']},null,2));
+console.log('Apps Script 배포용 Index.html, Code.gs, appsscript.json 생성 완료');
