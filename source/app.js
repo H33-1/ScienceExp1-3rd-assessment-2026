@@ -70,7 +70,7 @@
   const text = (name,placeholder='') => `<textarea id="${name}" data-field="${name}" ${name==='imageReason'?'aria-label="이 이미지를 만든 이유"':''} placeholder="${esc(placeholder)}" maxlength="8000" required>${esc(state.fields[name])}</textarea>`;
   const question = (n,name,label,hint='') => `<div class="question"><label for="${name}"><span class="number">${n}</span>${label}</label>${text(name,hint)}</div>`;
   function checks(group,items){return `<div class="checks">${items.map((x,i)=>`<label class="check"><input type="checkbox" data-check="${group}" data-index="${i}" ${state.checks[group]?.[i]?'checked':''}><span>${x}</span></label>`).join('')}</div>`;}
-  function upload(slot,label,large=false){const f=state.files[slot];return `<div><label class="upload ${large?'large':''}" data-drop="${slot}"><input type="file" accept="image/png,image/jpeg" data-upload="${slot}" aria-label="${label}"><span class="file-preview" data-preview="${slot}">${cloud}</span><strong>${f?esc(f.name)+' · 클릭하여 바꾸기':label}</strong><small>JPG, PNG · 파일당 최대 5MB</small></label>${f?`<button type="button" class="file-remove" data-remove="${slot}">파일 제거</button>`:''}<p class="file-note">${f?f.remote?'Drive에 저장된 이미지':'이 기기에 이미지 저장됨 · 제출할 때 Drive에 업로드':'클릭하거나 이미지를 끌어 놓으세요.'}</p></div>`;}
+  function upload(slot,label,large=false){const f=state.files[slot];return `<div><label class="upload ${large?'large':''}" data-drop="${slot}"><input type="file" accept="image/png,image/jpeg" data-upload="${slot}" aria-label="${label}"><span class="file-preview" data-preview="${slot}">${cloud}</span><strong>${f?esc(f.name)+' · 클릭하여 바꾸기':label}</strong><small>JPG, PNG · 파일당 최대 5MB</small></label>${f?`<button type="button" class="file-remove" data-remove="${slot}">파일 제거</button>`:''}<p class="file-note">${f?f.remote?'Drive에 저장된 이미지':f.localPersistent===false?'현재 창에만 사진 보관 중 · 새로고침하지 마세요':'기기에 임시 보관 중 · 최종 제출 시 저장':'클릭하거나 이미지를 끌어 놓으세요.'}</p></div>`;}
   function sampleTable(){return `<table class="sample-table"><caption>자료표 캡처 예시 (값은 예시입니다)</caption><thead><tr><th>년도</th><th>지점</th><th>평균기온(°C)</th><th>평균최저</th><th>평균최고</th></tr></thead><tbody>${[11.4,11.1,11.4,11.2,11.9].map((v,i)=>`<tr><td>${2000+i}</td><td>203</td><td>${v}</td><td>${(v-4.5).toFixed(1)}</td><td>${(v+6).toFixed(1)}</td></tr>`).join('')}</tbody></table>`;}
   function yearsTable(years){return `<div class="year-scroll" tabindex="0" aria-label="연평균 기온 입력표. 작은 화면에서는 가로로 스크롤하세요"><table class="year-table"><thead><tr><th>년도</th>${years.map(y=>`<th scope="col">${y}</th>`).join('')}</tr></thead><tbody><tr><th scope="row">평균기온(°C)</th>${years.map(y=>`<td><input type="number" inputmode="decimal" step="0.1" min="-60" max="60" data-year="${y}" value="${esc(state.temperatures[y])}" aria-label="${y}년 연평균 기온" required></td>`).join('')}</tr></tbody></table></div>`;}
   function pageContent(step){
@@ -89,7 +89,7 @@
     if(step===1){main.querySelector('.teal-frame').insertAdjacentHTML('afterend',environment);main.querySelector('.hero').insertAdjacentHTML('beforeend',hourglass);main.querySelector('.mascot').innerHTML=character('thermo');}
     hydratePreviews();
   }
-  async function hydratePreviews(){for(const slot of SLOTS){const target=document.querySelector(`[data-preview="${slot}"]`);if(!target || !state.files[slot])continue;try{const f=await imageStore('get',slot);if(f && target.isConnected){const url=URL.createObjectURL(f);previewUrls.push(url);target.innerHTML=`<img src="${url}" alt="${esc(state.files[slot].name)} 미리보기">`;}}catch(_){} }}
+  async function hydratePreviews(){for(const slot of SLOTS){const target=document.querySelector(`[data-preview="${slot}"]`);if(!target||!state.files[slot])continue;try{const file=await imageStore('get',slot);if(file&&target.isConnected){const url=file.dataUrl||URL.createObjectURL(file);if(!file.dataUrl)previewUrls.push(url);target.innerHTML=`<img src="${url}" alt="${esc(state.files[slot].name)} 미리보기">`;}}catch(_){} }}
   function renderComplete(){
     const r=state.receipt;
     main.innerHTML=`<div class="shell">${hero(5)}<div class="teal-frame"><section class="paper completion">
@@ -116,28 +116,56 @@
   }
   function validate(step){const errors=missing(step),el=document.querySelector('#formError');if(errors.length){el.innerHTML=`<div class="error"><strong>다음 항목을 확인하세요.</strong><ul>${errors.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`;el.scrollIntoView({block:'center',behavior:'smooth'});return false;}el.innerHTML='';return true;}
   function navigate(step){state.step=step;persist(false);render();window.scrollTo({top:0,behavior:'smooth'});main.focus({preventScroll:true});}
-  async function pickFile(slot,file){
-    if(busy||!file)return;
-    if(!['image/png','image/jpeg'].includes(file.type)){toast('JPG 또는 PNG 이미지 파일만 업로드할 수 있어요.');return;}
-    if(file.size>5*1024*1024 || !file.size){toast('파일은 0바이트보다 크고 5MB 이하여야 해요.');return;}
-    try{const bitmap=await createImageBitmap(file);bitmap.close();}catch(_){showModal('이미지를 읽을 수 없어요','<p>JPG 또는 PNG로 다시 저장한 파일을 선택해 주세요.</p>');return;}
-    const selected={name:file.name,type:file.type,size:file.size,requestId:makeId(),remote:false};
-    let storageFailed=false;
-    try{await imageStore('put',slot,file);sessionImages.delete(state.id+':'+slot);}catch(_){storageFailed=true;try{await imageStore('delete',slot);}catch(_){}sessionImages.set(state.id+':'+slot,file);}
-    state.files[slot]=selected;state.pendingRequest=null;persist();render();
-    if(storageFailed){
-      if(online){
-        busy=true;busyView('기기 저장 공간 대신 이미지를 Drive에 저장하고 있어요');
-        try{
-          const result=await rpc('uploadImage',{id:state.id,token:state.token,slot,requestId:selected.requestId,name:selected.name,mimeType:selected.type,base64:await base64(file)});
-          state.files[slot]={...selected,...result,remote:true};persist(false);render();
-          toast('이미지를 Drive에 저장했어요. 답안은 마지막에 제출해 주세요.');
-        }catch(e){showModal('이미지를 임시로 표시하고 있어요',`<p>기기 저장 공간이 부족하고 Drive 저장도 완료되지 않았어요.</p><p>${esc(e.message)}</p><p>새로고침하거나 창을 닫으면 이 사진이 사라집니다. 이 창을 유지한 채 연결을 확인하고 최종 제출을 다시 시도해 주세요.</p>`);}
-        finally{busy=false;document.querySelector('.busy')?.remove();}
-      }else showModal('이미지를 임시로 표시하고 있어요','<p>기기 저장 공간이 부족하여 사진을 이 창에서만 보관합니다. 새로고침하거나 창을 닫으면 사진이 사라집니다.</p><p>실제 학생 제출은 배포된 사이트를 이용해 주세요.</p>');
+  const IMAGE_LABELS={dataTable:'자료표 캡처',graph:'그래프 캡처',aiImage:'AI 이미지',newspaper:'기후신문'};
+  const IMAGE_STEPS={dataTable:2,graph:2,aiImage:4,newspaper:5};
+  function readDataURL(blob){return new Promise((resolve,reject)=>{
+    const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));
+    reader.onerror=()=>reject(new Error('사진 파일을 읽을 수 없습니다. 사진 앱에서 JPG·PNG로 기기에 저장한 뒤 다시 선택해 주세요.'));
+    reader.onabort=()=>reject(new Error('사진 읽기가 중단되었습니다. 같은 사진을 다시 선택해 주세요.'));
+    reader.readAsDataURL(blob);
+  });}
+  async function imageDataURL(file){
+    if(file && typeof file.dataUrl==='string')return file.dataUrl;
+    try{return await readDataURL(file);}catch(original){
+      if(typeof file?.arrayBuffer!=='function')throw original;
+      try{const bytes=new Uint8Array(await file.arrayBuffer());let raw='';for(let i=0;i<bytes.length;i+=32768)raw+=String.fromCharCode(...bytes.subarray(i,i+32768));return 'data:application/octet-stream;base64,'+btoa(raw);}catch(_){throw original;}
     }
   }
-  const base64 = file => new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('이미지를 읽을 수 없어요.'));reader.readAsDataURL(file);});
+  async function snapshotImage(file){
+    const dataUrl=await imageDataURL(file),payload=dataUrl.split(',')[1]||'';
+    const head=Uint8Array.from(atob(payload.slice(0,16)),c=>c.charCodeAt(0));
+    const png=[137,80,78,71,13,10,26,10].every((v,i)=>head[i]===v),jpg=head[0]===255&&head[1]===216&&head[2]===255;
+    if(!png&&!jpg)throw new Error('JPG 또는 PNG 파일만 가능합니다. HEIC·WEBP 등은 JPG·PNG로 변환한 뒤 선택해 주세요. 확장자만 바꾸면 안 됩니다.');
+    const type=png?'image/png':'image/jpeg',ownedURL='data:'+type+';base64,'+payload;
+    await new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>img.naturalWidth&&img.naturalHeight?resolve():reject(new Error('사진 크기를 확인할 수 없습니다.'));img.onerror=()=>reject(new Error('사진이 손상되었거나 브라우저에서 열 수 없습니다. JPG·PNG로 다시 저장한 뒤 선택해 주세요.'));img.src=ownedURL;});
+    return {version:2,dataUrl:ownedURL,type,name:file.name,size:file.size};
+  }
+  const base64=async file=>{const url=await imageDataURL(file);const value=url.split(',')[1];if(!value)throw new Error('사진 내용이 비어 있습니다. 원본 사진을 다시 선택해 주세요.');return value;};
+  async function uploadStoredImage(slot){
+    const f=state.files[slot];if(f?.remote)return;
+    let payload;
+    try{const saved=await imageStore('get',slot);if(!saved)throw new Error('보관된 사진이 없습니다.');payload=await base64(saved);}catch(e){const error=new Error(IMAGE_LABELS[slot]+' 사진을 다시 선택해 주세요. '+e.message);error.imageSlot=slot;throw error;}
+    const result=await rpc('uploadImage',{id:state.id,token:state.token,slot,requestId:f.requestId,name:f.name,mimeType:f.type,base64:payload});
+    state.files[slot]={...f,...result,remote:true};persist(false);
+  }
+  async function pickFile(slot,file){
+    if(busy||!file)return;
+    if(file.size>5*1024*1024||!file.size){showModal('사진 용량을 확인해 주세요','<p>JPG·PNG 사진은 0바이트보다 크고 파일당 최대 5MB여야 합니다.</p>');return;}
+    busy=true;busyView(IMAGE_LABELS[slot]+' 사진을 읽고 있어요');
+    let selected=false,stored=false;
+    try{
+      const owned=await snapshotImage(file);
+      // Keep owned bytes, not the temporary photo-library File reference.
+      sessionImages.set(state.id+':'+slot,owned);
+      try{await imageStore('put',slot,owned);stored=true;}catch(_){try{if(db)await new Promise((resolve,reject)=>{const tx=db.transaction('images','readwrite');tx.objectStore('images').delete(state.id+':'+slot);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});}catch(_){}}
+      state.files[slot]={name:file.name,type:owned.type,size:file.size,requestId:makeId(),remote:false,localPersistent:stored};state.pendingRequest=null;selected=true;persist();render();
+      if(online){busyView(IMAGE_LABELS[slot]+' 사진을 Drive에 저장하고 있어요');await uploadStoredImage(slot);render();toast('사진을 Drive에 저장했어요. 답안은 마지막에 제출해 주세요.');}
+      else if(!stored)showModal('사진은 현재 창에만 보관됩니다','<p>브라우저 임시 저장을 사용할 수 없습니다. 새로고침하거나 창을 닫으면 이 사진이 사라집니다.</p>');
+    }catch(e){
+      if(selected)showModal('사진 저장을 완료하지 못했어요','<p>'+esc(IMAGE_LABELS[slot])+': '+esc(e.message)+'</p><p>'+(stored?'사진은 기기에 임시 보관 중입니다. 연결을 확인하고 최종 제출에서 다시 시도하세요.':'사진은 현재 창에만 보관 중입니다. 새로고침하지 말고 연결을 확인한 뒤 최종 제출을 다시 시도하세요.')+'</p>');
+      else showModal(IMAGE_LABELS[slot]+' 사진을 읽지 못했어요','<p>'+esc(e.message)+'</p><p>기존 답안과 이전 사진은 바뀌지 않았습니다. 원본을 기기에 저장하거나 새로 캡처한 뒤 다시 선택해 주세요.</p>');
+    }finally{busy=false;document.querySelector('.busy')?.remove();}
+  }
   function busyView(msg){let el=document.querySelector('.busy');if(!el){el=document.createElement('div');el.className='busy';el.setAttribute('role','status');document.body.append(el);}el.innerHTML=`<div><div class="spinner"></div><strong>${esc(msg)}</strong><p>잠시 기다려 주세요. 이 창을 닫지 마세요.</p></div>`;}
   function startSubmit(){
     if(busy)return;
@@ -149,18 +177,18 @@
   async function submit(){
     if(busy)return;modal.close();busy=true;busyView('이미지를 준비하고 있어요');
     try{
-      if(online){for(let i=0;i<SLOTS.length;i++){const slot=SLOTS[i],f=state.files[slot];if(f.remote)continue;busyView(`이미지 업로드 중 (${i+1}/4)`);const blob=await imageStore('get',slot);if(!blob)throw new Error('저장된 '+slot+' 이미지가 없어요. 해당 페이지에서 다시 업로드하세요.');const result=await rpc('uploadImage',{id:state.id,token:state.token,slot,requestId:f.requestId,name:f.name,mimeType:f.type,base64:await base64(blob)});state.files[slot]={...f,...result,remote:true};persist(false);}
+      if(online){for(let i=0;i<SLOTS.length;i++){const slot=SLOTS[i];if(state.files[slot].remote)continue;busyView(IMAGE_LABELS[slot]+' 사진을 저장하고 있어요');await uploadStoredImage(slot);}
         busyView('답변을 저장하고 있어요');
         state.pendingRequest ||= makeId();persist(false);
         state.receipt=await rpc('submitAssessment',{id:state.id,token:state.token,requestId:state.pendingRequest,fields:state.fields,temperatures:state.temperatures,checks:state.checks,files:state.files});
       }else{const now=new Date().toISOString();state.receipt={mode:'demo',createdAt:state.receipt?.createdAt||now,updatedAt:now,status:'미리보기 완료'};}
       state.pendingRequest=null;state.dirty=false;state.view='complete';persist(false);render();window.scrollTo(0,0);
-    }catch(e){showModal('제출을 완료하지 못했어요',`<p>${esc(e.message)}</p><p>답변과 이미지는 이 기기에 남아 있습니다. 연결과 배포 설정을 확인한 뒤 다시 제출하세요.</p>`);}
+    }catch(e){if(e.imageSlot)navigate(IMAGE_STEPS[e.imageSlot]);showModal('제출을 완료하지 못했어요',`<p>${esc(e.message)}</p><p>작성한 답안은 유지했습니다. 사진을 읽지 못했다면 표시된 항목에서 원본 사진을 다시 선택하세요. ‘Drive에 저장된 이미지’는 다시 올릴 필요가 없습니다.</p>`);}
     finally{busy=false;document.querySelector('.busy')?.remove();}
   }
   function exportAnswers(){const data={...state};delete data.token;const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='기후탐구_내답변.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   document.addEventListener('input',e=>{if(busy)return;const el=e.target;if(el.dataset.field){if(el.type==='radio'&&!el.checked)return;state.fields[el.dataset.field]=el.value;state.pendingRequest=null;persist();}if(el.dataset.year){state.temperatures[el.dataset.year]=el.value;state.pendingRequest=null;persist();}});
-  document.addEventListener('change',e=>{if(busy)return;const el=e.target;if(el.dataset.check){state.checks[el.dataset.check][Number(el.dataset.index)]=el.checked;state.pendingRequest=null;persist();}if(el.dataset.upload)pickFile(el.dataset.upload,el.files[0]);});
+  document.addEventListener('change',async e=>{if(busy)return;const el=e.target;if(el.dataset.check){state.checks[el.dataset.check][Number(el.dataset.index)]=el.checked;state.pendingRequest=null;persist();}if(el.dataset.upload){await pickFile(el.dataset.upload,el.files[0]);if(el.isConnected)el.value='';}});
   document.addEventListener('dragover',e=>{if(e.target.closest('[data-drop]'))e.preventDefault();});
   document.addEventListener('drop',e=>{const el=e.target.closest('[data-drop]');if(el){e.preventDefault();pickFile(el.dataset.drop,e.dataTransfer.files[0]);}});
   document.addEventListener('submit',e=>e.preventDefault());
