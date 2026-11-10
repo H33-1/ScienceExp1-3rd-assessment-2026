@@ -98,7 +98,7 @@
       ${r?.mode==='demo'?'<div class="mode-note">체험 결과입니다. Google Sheets와 Drive에는 저장되지 않았습니다.</div>':'<p>작성 내용을 수정한 뒤 다시 제출할 수 있습니다.</p>'}
       <dl><dt>조사 지역</dt><dd>${esc(state.fields.region)}</dd><dt>최초 제출 시각</dt><dd>${fmt(r?.createdAt)}</dd><dt>최종 수정 시각</dt><dd>${fmt(r?.updatedAt)}</dd><dt>제출 상태</dt><dd>${r?.mode==='demo'?'미리보기 완료':esc(r?.status||'제출 완료')}</dd><dt>제출 번호</dt><dd>${esc(state.id)}</dd></dl>
       <div class="nav"><button class="next" type="button" data-edit>내용 수정하기 ❯</button></div>
-      ${r?.mode!=='demo'?`<details class="recovery"><summary>다른 기기에서 불러오기 위한 복구 코드</summary><p class="hint">이 코드를 보관하면 다른 기기에서 제출 내용을 불러올 수 있어요. 다른 사람에게 공유하지 마세요.</p><code>${esc(state.id+'.'+state.token)}</code></details>`:''}
+      <p class="hint">다른 기기에서는 ‘내 답안 조회·수정’에서 최초 제출한 인적사항을 입력하면 됩니다.</p>
       <div class="modal-actions"><button type="button" data-export>내 답변 내려받기</button><button type="button" data-new>새 학생 시작</button></div>
     </section></div></div>`;
   }
@@ -175,12 +175,27 @@
     if(el.hasAttribute('data-edit')){state.view='form';navigate(1);}
     if(el.dataset.remove){await imageStore('delete',el.dataset.remove);delete state.files[el.dataset.remove];state.pendingRequest=null;persist();render();}
     if(el.hasAttribute('data-export'))exportAnswers();
-    if(el.hasAttribute('data-new'))showModal('새 학생 시작', '<p>이 기기에 저장된 현재 학생의 답변과 복구 코드를 지웁니다. 선생님께 제출한 자료는 유지됩니다. 필요한 답변과 복구 코드를 먼저 보관하세요.</p>', '<button type="button" data-close>취소</button><button type="button" class="confirm" data-reset>새 학생 시작</button>');
+    if(el.hasAttribute('data-new'))showModal('새 학생 시작', '<p>이 기기에 저장된 현재 학생의 기기 내 답변을 지웁니다. 선생님께 제출한 자료는 유지됩니다. 필요한 답변을 먼저 내려받으세요.</p>', '<button type="button" data-close>취소</button><button type="button" class="confirm" data-reset>새 학생 시작</button>');
     if(el.hasAttribute('data-reset')){for(const slot of SLOTS){try{await imageStore('delete',slot);}catch(_){}}state=fresh();persist(false);modal.close();render();window.scrollTo(0,0);}
-    if(el.hasAttribute('data-recover'))showModal('제출 내용 불러오기','<p>제출 완료 화면에서 보관한 복구 코드를 입력하세요.</p><label class="field" for="recoveryCode">복구 코드<input id="recoveryCode" autocomplete="off"></label><p class="hint">불러오면 이 기기의 현재 답변을 대체합니다. 필요한 답변을 먼저 내려받으세요.</p>', '<button type="button" data-close>취소</button><button type="button" class="confirm" data-recover-confirm>불러오기</button>');
-    if(el.hasAttribute('data-recover-confirm')){const code=document.querySelector('#recoveryCode').value.trim(),parts=code.split('.');if(parts.length!==2){toast('복구 코드 형식을 확인하세요.');return;}busy=true;try{const result=await rpc('getSubmission',{id:parts[0],token:parts[1]});state={...fresh(),...result,id:parts[0],token:parts[1],step:5,view:'complete',dirty:false};for(const slot of SLOTS){try{await imageStore('delete',slot);}catch(_){}}persist(false);modal.close();render();}catch(err){toast(err.message);}finally{busy=false;}}
+    if(el.hasAttribute('data-recover')){
+      const labels=[['courseClass','과학탐구실험1 반 (A~F)'],['school','학교'],['grade','학년'],['classNumber','반'],['studentNumber','번호'],['name','이름']];
+      showModal('내 답안 조회·수정','<p>최초 제출할 때 입력한 인적사항을 모두 정확히 입력하세요.</p>'+labels.map(([key,label])=>'<label class="field" for="lookup-'+key+'">'+label+'<input id="lookup-'+key+'" data-identity="'+key+'" value="'+esc(state.fields[key]||'')+'" maxlength="1000" autocomplete="off"></label>').join('')+'<p class="hint">최종 제출한 답안만 조회할 수 있습니다. 불러오면 현재 기기의 작성 내용을 대체하므로 필요한 답변은 먼저 내려받으세요.</p><p id="lookupError" role="alert" style="color:#a52d12"></p>','<button type="button" data-close>취소</button><button type="button" class="confirm" data-recover-confirm>내 답안 불러오기</button>');
+    }
+    if(el.hasAttribute('data-recover-confirm')){
+      const fields={};document.querySelectorAll('[data-identity]').forEach(input=>fields[input.dataset.identity]=input.value.trim());
+      const error=document.querySelector('#lookupError');if(Object.values(fields).some(v=>!v)){error.textContent='인적사항을 모두 입력하세요.';return;}
+      if(!online){error.textContent='실제 배포 사이트에서 이용해 주세요.';return;}
+      busy=true;el.disabled=true;el.textContent='답안을 찾고 있어요';
+      try{
+        const token=makeId()+makeId();const result=await rpc('getSubmissionByIdentity',{fields,token});
+        state={...fresh(),...result,step:1,view:'form',dirty:false};
+        for(const slot of SLOTS){try{await imageStore('delete',slot);}catch(_){}}
+        persist(false);modal.close();render();window.scrollTo(0,0);
+        toast('기존 답안을 불러왔어요. 수정 후 마지막에 다시 제출해 주세요.');
+      }catch(err){error.textContent=err.message;el.disabled=false;el.textContent='내 답안 불러오기';}finally{busy=false;}
+    }
   });
-  async function init(){try{db=await openDB();}catch(_){dbFailure=true;}persist(false);render();if(dbFailure)toast('브라우저 저장 공간을 사용할 수 없어요. 이미지 업로드를 위해 저장 공간을 허용하세요.');const utility=document.querySelector('.utility');if(online){const recover=document.createElement('button');recover.className='small-button';recover.textContent='제출 내용 불러오기';recover.setAttribute('data-recover','');utility.append(recover);} }
+  async function init(){try{db=await openDB();}catch(_){dbFailure=true;}persist(false);render();if(dbFailure)toast('브라우저 저장 공간을 사용할 수 없어요. 이미지 업로드를 위해 저장 공간을 허용하세요.');const utility=document.querySelector('.utility');if(online){const recover=document.createElement('button');recover.className='small-button';recover.textContent='내 답안 조회·수정';recover.setAttribute('data-recover','');utility.append(recover);} }
   window.ClimateApp={missing,startSubmit,getState:()=>structuredClone(state),isOnline:online};
   init();
 })();
