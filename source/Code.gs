@@ -87,3 +87,25 @@ function submitAssessment(req) {
   });
 }
 function getSubmission(req){auth_(req);return locked_(()=>{const r=record_(config_(),req,false),json=r.values[HEADERS.indexOf('전체답변JSON')];if(!json)throw new Error('최종 제출된 답변이 아직 없습니다. 원래 기기에서 제출을 완료하세요.');return JSON.parse(json);});}
+
+/** User-approved recovery using all six identity fields; never returns a list of students. */
+function getSubmissionByIdentity(req){
+  const keys=['courseClass','school','grade','classNumber','studentNumber','name'];
+  // School grade/class/number plus course class, school and name are six form fields.
+  if(!req||!req.fields||!/^[a-zA-Z0-9-]{32,160}$/.test(req.token||''))throw new Error('입력 정보를 확인하세요.');
+  const clean=v=>String(v==null?'':v).normalize('NFC').trim();
+  const f={};keys.forEach(k=>{f[k]=clean(req.fields[k]);if(!f[k]||f[k].length>1000)throw new Error('인적사항을 모두 입력하세요.');});
+  if(!/^[A-F]$/.test(f.courseClass)||!['1','2','3'].includes(f.grade)||!/^\d+$/.test(f.classNumber)||!/^\d+$/.test(f.studentNumber))throw new Error('인적사항을 확인하세요.');
+  return locked_(()=>{
+    const s=config_().ss.getSheetByName(SETTINGS.sheetName);
+    const rows=s.getLastRow()>1?s.getRange(2,1,s.getLastRow()-1,HEADERS.length).getValues():[];
+    const matches=[];
+    rows.forEach((row,i)=>{const raw=row[HEADERS.indexOf('전체답변JSON')];if(!row[HEADERS.indexOf('최초제출시각')]||!raw)return;let saved;try{saved=JSON.parse(raw);}catch(_){return;}if(keys.every(k=>clean(saved.fields&&saved.fields[k])===f[k]))matches.push({row:i+2,id:row[0],saved});});
+    if(matches.length===0)throw new Error('일치하는 제출 답안이 없습니다. 최초 제출 때 입력한 학교 이름과 인적사항을 확인하세요. 아직 제출하지 않은 답안은 작성했던 기기에서 확인해 주세요.');
+    if(matches.length>1)throw new Error('같은 인적사항으로 제출한 답안이 여러 개입니다. 선생님께 문의하세요.');
+    const match=matches[0];s.getRange(match.row,2).setValue(hash_(req.token));
+    return Object.assign({},match.saved,{id:match.id,token:req.token});
+  });
+}
+
+
