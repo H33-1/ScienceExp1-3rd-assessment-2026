@@ -30,6 +30,7 @@
   const main = document.querySelector('#main');
   const modal = document.querySelector('#modal');
   let state, db, busy = false, previewUrls = [], debounce, dbFailure = false;
+  const sessionImages = new Map();
   const makeId = () => crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
   const fresh = () => ({version:1,id:makeId(),token:makeId()+makeId(),step:1,view:'form',fields:{},temperatures:{},checks:{data:[],final:[]},files:{},receipt:null,dirty:false,clientUpdatedAt:null});
   const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -44,6 +45,9 @@
   }
   function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open('climate-assessment-images-v1',1);req.onupgradeneeded=()=>req.result.createObjectStore('images');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
   async function imageStore(action,slot,file){
+    const sessionKey=state.id+':'+slot;
+    if(action==='get' && sessionImages.has(sessionKey))return sessionImages.get(sessionKey);
+    if(action==='delete')sessionImages.delete(sessionKey);
     if(!db)throw new Error('이미지를 저장할 수 없어요. 브라우저에서 사이트 저장 공간을 허용하세요.');
     return new Promise((resolve,reject)=>{const tx=db.transaction('images',action==='get'?'readonly':'readwrite'),s=tx.objectStore('images'),key=state.id+':'+slot;const req=action==='get'?s.get(key):action==='put'?s.put(file,key):s.delete(key);let value;req.onsuccess=()=>{value=req.result;};tx.oncomplete=()=>resolve(value);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});
   }
@@ -112,7 +116,27 @@
   }
   function validate(step){const errors=missing(step),el=document.querySelector('#formError');if(errors.length){el.innerHTML=`<div class="error"><strong>다음 항목을 확인하세요.</strong><ul>${errors.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`;el.scrollIntoView({block:'center',behavior:'smooth'});return false;}el.innerHTML='';return true;}
   function navigate(step){state.step=step;persist(false);render();window.scrollTo({top:0,behavior:'smooth'});main.focus({preventScroll:true});}
-  async function pickFile(slot,file){if(busy||!file)return;if(!['image/png','image/jpeg'].includes(file.type)){toast('JPG 또는 PNG 이미지 파일만 업로드할 수 있어요.');return;}if(file.size>5*1024*1024 || !file.size){toast('파일은 0바이트보다 크고 5MB 이하여야 해요.');return;}try{const bitmap=await createImageBitmap(file);bitmap.close();await imageStore('put',slot,file);state.files[slot]={name:file.name,type:file.type,size:file.size,requestId:makeId(),remote:false};state.pendingRequest=null;persist();render();}catch(_){toast('이미지를 읽거나 저장할 수 없어요. 파일과 브라우저 저장 공간을 확인하세요.');}}
+  async function pickFile(slot,file){
+    if(busy||!file)return;
+    if(!['image/png','image/jpeg'].includes(file.type)){toast('JPG 또는 PNG 이미지 파일만 업로드할 수 있어요.');return;}
+    if(file.size>5*1024*1024 || !file.size){toast('파일은 0바이트보다 크고 5MB 이하여야 해요.');return;}
+    try{const bitmap=await createImageBitmap(file);bitmap.close();}catch(_){showModal('이미지를 읽을 수 없어요','<p>JPG 또는 PNG로 다시 저장한 파일을 선택해 주세요.</p>');return;}
+    const selected={name:file.name,type:file.type,size:file.size,requestId:makeId(),remote:false};
+    let storageFailed=false;
+    try{await imageStore('put',slot,file);sessionImages.delete(state.id+':'+slot);}catch(_){storageFailed=true;try{await imageStore('delete',slot);}catch(_){}sessionImages.set(state.id+':'+slot,file);}
+    state.files[slot]=selected;state.pendingRequest=null;persist();render();
+    if(storageFailed){
+      if(online){
+        busy=true;busyView('기기 저장 공간 대신 이미지를 Drive에 저장하고 있어요');
+        try{
+          const result=await rpc('uploadImage',{id:state.id,token:state.token,slot,requestId:selected.requestId,name:selected.name,mimeType:selected.type,base64:await base64(file)});
+          state.files[slot]={...selected,...result,remote:true};persist(false);render();
+          toast('이미지를 Drive에 저장했어요. 답안은 마지막에 제출해 주세요.');
+        }catch(e){showModal('이미지를 임시로 표시하고 있어요',`<p>기기 저장 공간이 부족하고 Drive 저장도 완료되지 않았어요.</p><p>${esc(e.message)}</p><p>새로고침하거나 창을 닫으면 이 사진이 사라집니다. 이 창을 유지한 채 연결을 확인하고 최종 제출을 다시 시도해 주세요.</p>`);}
+        finally{busy=false;document.querySelector('.busy')?.remove();}
+      }else showModal('이미지를 임시로 표시하고 있어요','<p>기기 저장 공간이 부족하여 사진을 이 창에서만 보관합니다. 새로고침하거나 창을 닫으면 사진이 사라집니다.</p><p>실제 학생 제출은 배포된 사이트를 이용해 주세요.</p>');
+    }
+  }
   const base64 = file => new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('이미지를 읽을 수 없어요.'));reader.readAsDataURL(file);});
   function busyView(msg){let el=document.querySelector('.busy');if(!el){el=document.createElement('div');el.className='busy';el.setAttribute('role','status');document.body.append(el);}el.innerHTML=`<div><div class="spinner"></div><strong>${esc(msg)}</strong><p>잠시 기다려 주세요. 이 창을 닫지 마세요.</p></div>`;}
   function startSubmit(){
